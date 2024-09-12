@@ -1,0 +1,12 @@
+UNDERVISNINGSTYP:
+  FÖ: "Föreläsning"
+  GU: "Grupparbete"
+  LE: "Lektion"
+  ME: "Mentorspass"
+  LA: "Labb"
+  EX: "Examination"
+KURSKOD:
+  TATA69: "Flervariabelanalys"
+  TSEA51: "Digitalteknik"
+  TATA24: "Linjär algebra"
+STUDENTGRUPP: false
