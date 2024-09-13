@@ -1,16 +1,10 @@
-# from flask import Flask, make_response
-# import warnings
-# import requests
+from flask import Flask, make_response
+import requests
 import re
 from icalendar import Calendar
 import yaml
-
-content = ""
-
-with open("schedule.ics", "r", encoding="utf8") as schedule:
-    content = schedule.read()
-
-calendar = Calendar.from_ical(content)
+import hashlib
+import os.path
 
 component_name = "SUMMARY"
 
@@ -20,66 +14,104 @@ def generate_regex(field="SUMMARY"):
         return yaml.safe_load(file)
 
 
-for (i, ev) in enumerate(calendar.walk("VEVENT")):
-    c = re.compile(
-        "(?P<KURSKOD>([a-zA-Z0-9, ]+)), Undervisningstyp: (?P<UNDERVISNINGSTYP>[A-ö0-9]+),"
-    )
-
-    rules = generate_regex(component_name)
-    groups = c.match(ev[component_name]).groupdict()
-
-    data = {}
-    passes_normally = True
-
-    for group_name in groups:
-        captured = groups[group_name]
-        values = captured if len(captured.split(
-            ", ")) == 1 else captured.split(", ")
-
-        try:
-            if rules[group_name] != None:
-                if type(values) is str:
-                    data[group_name] = rules[group_name][captured]
-                else:
-                    for v in values:
-                        if v in rules[group_name]:
-                            data[group_name] = rules[group_name][v]
-                            break
-        except:
-            passes_normally = False
-
-    if passes_normally:
-        ev[component_name] = data["KURSKOD"] + " - " + data["UNDERVISNINGSTYP"]
-
-f = open("transformed.ics", "w", encoding="utf8")
-f.write(calendar.to_ical().decode("utf8"))
-f.close()
-
-# app = Flask(__name__)
+def get_transformed(ical_id):
+    with open(f"./transformed/{ical_id}") as cal_file:
+        return Calendar.from_ical(cal_file.read())
 
 
-# @app.route("/")
-# def hello_world():
-# 	 return "<p>Hello, World!</p>"
+def transform_calendar(calendar):
+    new_calendar = Calendar.from_ical(calendar.to_ical())
+    for ev in new_calendar.walk("VEVENT"):
+        c = re.compile(
+            "(?P<KURSKOD>([a-zA-Z0-9, ]+)), Undervisningstyp: (?P<UNDERVISNINGSTYP>[A-ö0-9]+),"
+        )
+
+        rules = generate_regex(component_name)
+        groups = c.match(ev[component_name]).groupdict()
+
+        data = {}
+        passes_normally = True
+
+        for group_name in groups:
+            captured = groups[group_name]
+            values = captured if len(captured.split(
+                ", ")) == 1 else captured.split(", ")
+
+            try:
+                if rules[group_name] != None:
+                    if type(values) is str:
+                        data[group_name] = rules[group_name][captured]
+                    else:
+                        for v in values:
+                            if v in rules[group_name]:
+                                data[group_name] = rules[group_name][v]
+                                break
+            except:
+                passes_normally = False
+
+        if passes_normally:
+            ev[component_name] = data["KURSKOD"] + \
+                " - " + data["UNDERVISNINGSTYP"]
+
+    return new_calendar
 
 
-# @app.route("/calendar/<string:ical_id>")
-# def get_calendar(ical_id):
-# 	 calendar = icalendar.Calendar.from_ical(
-# 		 requests.get(f"{BASE_TIMEEDIT_URL}/{ical_id}.ical").text
-# 	 )
+def save_calendar(id, calendar):
+    f = open(f"transformed/{id}", "w", encoding="utf8")
+    f.write(calendar.to_ical().decode("utf8"))
+    f.close()
 
-# 	 for event in calendar.walk("VEVENT"):
-# 		 for t, transforms in rules:
-# 			 for i, o in transforms:
-# 				 c = re.compile(i)
-# 				 event[t] = c.sub(o, event[t])
-
-# 	 resp = make_response(calendar.to_ical(), 200)
-# 	 resp.headers["Content-Type"] = "text/plain; charset=utf-8"
-
-# 	 return resp
+    return True
 
 
-# SUMMARY: [KURSKOD], Undervisningstyp: <UNDERVISNINGSTYP>, [GRUPPER]
-# DESCRIPTION: []
+def save_hash(id, calendar):
+    f = open(f"originals/{id}", "w", encoding="utf8")
+    print("Saving", hashlib.sha256(calendar.to_ical()).hexdigest())
+    f.write(hashlib.sha256(calendar.to_ical()).hexdigest())
+    f.close()
+
+    return True
+
+
+app = Flask(__name__)
+
+BASE_TIMEEDIT_URL = "https://cloud.timeedit.net/liu/web/schema"
+
+
+@app.route("/")
+def hello_world():
+    return "<p>Hello, World!</p>"
+
+
+@app.route("/calendar/<string:ical_id>.ics")
+def get_calendar(ical_id):
+    r = requests.get(f"{BASE_TIMEEDIT_URL}/{ical_id}.ical")
+    raw_cal = r.content.decode('utf-8')
+
+    cal_exists = os.path.isfile(f"./originals/{ical_id}")
+
+    new_calendar = None
+    calendar = Calendar.from_ical(raw_cal)
+
+    if cal_exists:
+        with open(f"./originals/{ical_id}", "r") as hash_file:
+            hash = hash_file.readline()
+
+            if hash != hashlib.sha256(calendar.to_ical()).hexdigest():
+                new_calendar = transform_calendar(calendar)
+
+                save_hash(ical_id, calendar)
+                save_calendar(ical_id, new_calendar)
+            else:
+                new_calendar = get_transformed(ical_id)
+
+    else:
+        new_calendar = transform_calendar(calendar)
+
+        save_hash(ical_id, calendar)
+        save_calendar(ical_id, new_calendar)
+
+    resp = make_response(new_calendar.to_ical(), 200)
+    resp.headers["Content-Type"] = "text/plain; charset=utf-8"
+
+    return resp
