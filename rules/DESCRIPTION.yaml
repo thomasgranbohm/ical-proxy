@@ -1,0 +1,5 @@
+LINE_REMOVALS: 
+  - "ID"
+  - "Kurs:"
+  - "Undervisningstyp:"
+SPLIT_STR: "\n"

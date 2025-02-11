@@ -4,9 +4,22 @@ import re
 from icalendar import Calendar
 import yaml
 import hashlib
+import os
 import os.path
 
-component_name = "SUMMARY"
+COMPONENT_NAME = "SUMMARY"
+
+def get_settings():
+    settings = {}
+    for file_name in os.listdir("./rules"):
+        component, extension = file_name.split(".")
+        assert extension == "yaml"
+
+        with open(f"./rules/{file_name}", "r") as file:
+            settings[component] = yaml.safe_load(file)
+
+    return settings
+
 
 
 def generate_regex(field="SUMMARY"):
@@ -27,41 +40,66 @@ def get_transformed(ical_id):
         return cal
 
 
+def find_first(l, d):
+    return next(((d[key], i) for i, key in enumerate(l) if key in d), (None, None))
+
+EVENT_FORMAT = {
+    "SUMMARY": "%(COURSE_NAME)s — %(TEACHING_ACTIVITY)s", 
+    "LOCATION": "%s", 
+    "DESCRIPTION": "%s" #"Lärare: {teachers}\nInformation: {information}\nKarta: {map_url}"
+}
+
+
+### I hate writing super specific solution even if the problem is super specific
 def transform_calendar(calendar):
     new_calendar = Calendar.from_ical(calendar.to_ical())
+    settings = get_settings()
 
     for ev in new_calendar.walk("VEVENT"):
-        c = re.compile(
-            "(?P<KURSKOD>([a-zA-Z0-9, ]+)), Undervisningstyp: (?P<UNDERVISNINGSTYP>[A-ö0-9]+),"
-        )
+        for component_name in settings.keys():
+            named_information = {}
+            component_settings = settings[component_name]
+            code_names = ev[component_name].split(component_settings["SPLIT_STR"])
 
-        rules = generate_regex(component_name)
-        groups = c.match(ev[component_name]).groupdict()
+            if "LINE_REMOVALS" in component_settings:
+                line_removals = component_settings["LINE_REMOVALS"]
+                
+                indexes = []
+                for removal in line_removals:
+                    for i, code_name in enumerate(code_names):
+                        if removal in code_name:
+                            indexes.append(i)
 
-        data = {}
-        passes_normally = True
+                code_names = [i.strip() for j, i in enumerate(code_names) if j not in indexes]
 
-        for group_name in groups:
-            captured = groups[group_name]
-            values = captured if len(captured.split(
-                ", ")) == 1 else captured.split(", ")
+            if "STRING_REMOVALS" in component_settings:
+                string_removals = component_settings["STRING_REMOVALS"]
 
-            try:
-                if rules[group_name] != None:
-                    if type(values) is str:
-                        data[group_name] = rules[group_name][captured]
-                    else:
-                        for v in values:
-                            if v in rules[group_name]:
-                                data[group_name] = rules[group_name][v]
-                                break
-            except:
-                passes_normally = False
+                for removal in string_removals:
+                    for i in range(len(code_names)):
+                        code_name = code_names[i]
 
-        if passes_normally:
-            ev[component_name] = data["KURSKOD"] + \
-                " - " + data["UNDERVISNINGSTYP"]
+                        if removal in code_name:    
+                            code_names[i] = "".join(code_name.split(removal)).strip()
+                            
+                        
 
+            if "REPLACEMENTS" in component_settings:
+                replacements = component_settings["REPLACEMENTS"]
+
+                for key, values in replacements.items():
+                    found, _ = find_first(code_names, values)
+
+                    if found != None:
+                        named_information[key] = found
+
+                try:
+                    ev[component_name] = EVENT_FORMAT[component_name] % named_information
+                except KeyError as e:
+                    print("Could not find matching %s for %s" % (key, code_names))
+            else:
+                ev[component_name] = EVENT_FORMAT[component_name] % "\n".join(code_names)
+            
     return new_calendar
 
 
@@ -126,7 +164,7 @@ def get_calendar(ical_id):
     new_calendar = None
     calendar = Calendar.from_ical(raw_cal)
 
-    if cal_exists:
+    if cal_exists and "FLASK_DEBUG" not in os.environ:
         with open(f"./originals/{ical_id}", "r") as hash_file:
             hash = hash_file.readline()
 

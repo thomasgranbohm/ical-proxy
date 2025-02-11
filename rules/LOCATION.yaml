@@ -1,0 +1,3 @@
+STRING_REMOVALS: 
+  - "Lokal:"
+SPLIT_STR: "\n"
